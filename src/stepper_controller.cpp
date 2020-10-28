@@ -108,6 +108,29 @@ static void exitCriticalSection(bool prevState)
 }
 
 
+void StepperCtrl::setHoldCurrentMa(int32_t currentHoldMa)
+{
+	bool state=enterCriticalSection();
+	motorParams.currentHoldMa=max(0, min(currentHoldMa,2000));
+	exitCriticalSection(state);
+}
+
+void StepperCtrl::setDynamicCurrentMa(int32_t currentMa)
+{
+	bool state=enterCriticalSection();
+	motorParams.currentMa=max(0, min(currentMa,2000));
+	exitCriticalSection(state);
+}
+
+uint32_t StepperCtrl::getHoldCurrentMa(void) {
+	return max(0, motorParams.currentHoldMa);
+}
+
+uint32_t StepperCtrl::getDynamicCurrentMa(void) {
+	return max(0, motorParams.currentMa);
+}
+
+		
 void StepperCtrl::updateParamsFromNVM(void)
 {
 	bool state=enterCriticalSection();
@@ -739,7 +762,7 @@ Angle StepperCtrl::sampleMeanEncoder(int32_t numSamples)
 #ifndef MECHADUINO_HARDWARE
 			SerialUSB.println("AS5047 Error");
 #else
-      Serial5.print("AS5047 Error");
+      //Serial5.print("AS5047 Error");
 #endif
 			delay(1000);
 			return 0;
@@ -1837,6 +1860,12 @@ void StepperCtrl::PID_Autotune(void)
 	if (state) enableTCInterrupts();
 
 }
+
+
+bool StepperCtrl::getEncoderError() {
+	return encoder.getError();
+}
+
 
 //void StepperCtrl::printData(void)
 //{

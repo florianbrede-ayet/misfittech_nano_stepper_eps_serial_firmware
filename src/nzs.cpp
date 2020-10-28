@@ -33,8 +33,50 @@
 #include "steppin.h"
 #include "wiring_private.h"
 
+#include "EasyTransfer.h"
+#include "CanHelper.h"
+
 #pragma GCC push_options
 #pragma GCC optimize ("-Ofast")
+
+
+#define SERIAL_TX_FREQ 25
+
+unsigned long lastSerialOut=0;
+
+
+uint8_t serialPackage[8];
+
+EasyTransfer ET;
+CanHelper canHelper;
+
+
+struct SERIAL_DATA_STRUCTURE{
+    uint8_t statusMask;
+    int32_t currentAngle;
+    int32_t targetAngle;
+	uint8_t rpm;
+    uint16_t dynamicCurrent;
+    int16_t holdCurrent;
+	uint8_t counter;
+	uint8_t checksum;
+    // ^--> 120 bytes
+};
+
+SERIAL_DATA_STRUCTURE serialDataStructure;
+
+uint8_t plannerRPM = 0;
+
+volatile bool enableStepperMotor = false;
+
+unsigned long lastSerialMessageReceived=0;
+unsigned long lastSerialMessageError=0;
+unsigned long lastMotorError=0;
+bool hasSerialErrorState = false;
+bool hasCalibrationErrorState = true;
+bool hasEncoderErrorState = false;
+bool hasMotorErrorState = false;
+bool hasStopped = false;
 
 eepromData_t PowerupEEPROM={0};
 
@@ -633,10 +675,13 @@ void NZS::begin(void)
 	//TODO check for power on USB before doing this...
 #ifndef MECHADUINO_HARDWARE
 	SerialUSB.begin(SERIAL_BAUD);
+
+    ET.begin(details(serialDataStructure), &SerialUSB);
+
 #endif
 
 	//setup the serial port for syslog
-	Serial5.begin(SERIAL_BAUD);
+	//Serial5.begin(SERIAL_BAUD);
 
 
 #ifndef CMD_SERIAL_PORT
@@ -708,8 +753,8 @@ void NZS::begin(void)
 			SerialUSB.println("Appears that there is no Motor Power");
 			SerialUSB.println("Connect motor power!");
 #else
-      Serial5.println("Appears that there is no Motor Power");
-      Serial5.println("Connect motor power!");
+      //Serial5.println("Appears that there is no Motor Power");
+     // Serial5.println("Connect motor power!");
 #endif
 #ifndef DISABLE_LCD
 			Lcd.lcdShow("Waiting", "MOTOR", "POWER");
@@ -726,7 +771,7 @@ void NZS::begin(void)
 #ifndef MECHADUINO_HARDWARE
 			SerialUSB.println("You need to Calibrate");
 #else
-      Serial5.println("You need to Calibrate");
+      //Serial5.println("You need to Calibrate");
 #endif
 #ifndef DISABLE_LCD
 			Lcd.lcdShow("   NOT ", "Calibrated", " ");
@@ -742,6 +787,11 @@ void NZS::begin(void)
 
 #ifndef DISABLE_LCD
 				Lcd.process();
+#else
+				if (digitalRead(PIN_SW3)==0)
+				{
+					stepperCtrl.calibrateEncoder();
+				}
 #endif
 
 			}
@@ -758,9 +808,9 @@ void NZS::begin(void)
 			SerialUSB.println(" try disconnecting power from board for 15+mins");
 			SerialUSB.println(" you might have to short out power pins to ground");
 #else
-      Serial5.println("AS5047D not working");
-      Serial5.println(" try disconnecting power from board for 15+mins");
-      Serial5.println(" you might have to short out power pins to ground");
+      //Serial5.println("AS5047D not working");
+      //Serial5.println(" try disconnecting power from board for 15+mins");
+      //Serial5.println(" you might have to short out power pins to ground");
 #endif
 #ifndef DISABLE_LCD
 			Lcd.lcdShow("Encoder", " Error!", " REBOOT");
@@ -788,6 +838,10 @@ void NZS::begin(void)
 	SmartPlanner.begin(&stepperCtrl);
 	RED_LED(false);
 	LOG("SETUP DONE!");
+
+	if (stepperCtrl.calibrationValid())
+		hasCalibrationErrorState=false;
+
 }
 
 
@@ -856,6 +910,105 @@ void printLocation(void)
 	return;
 }
 
+
+
+/* void readSerialMessages() {
+	boolean receivedPackage=false;
+  	while(ET.receiveBufferedData()) {
+		if (canHelper.verifyToyotaChecksum(serialPackage, 0x123)) {
+			uint8_t stepperAvailable = canHelper.parseParameterBigEndianByte(serialPackage, 0, 1, 0, 1); // available (0 for calibration, motor etc.)
+			uint8_t stepperEnabled = canHelper.parseParameterBigEndianByte(serialPackage, 0, 1, 1, 1); // available (0 for calibration, motor etc.)
+			int16_t stepperCurrentAngle = canHelper.parseParameterBigEndianByte(serialPackage, 0, 1, 2, 16); // current angle
+			int16_t stepperTargetAngle = canHelper.parseParameterBigEndianByte(serialPackage, 0, 1, 18, 16); // target angle
+			int16_t stepperDynamicCurrentMa = canHelper.parseParameterBigEndianByte(serialPackage, 0, 1, 34, 11); // dynamic current in ma
+			int16_t stepperholdCurrentMa = canHelper.parseParameterBigEndianByte(serialPackage, 0, 1, 45, 11); // hold current in ma
+			receivedPackage=true;
+		}  
+  	}
+  	if (receivedPackage)
+  		lastSerialMessageReceived=millis();
+
+	return;
+}
+ */
+
+void readSerialMessages() {
+	boolean receivedPackage=false;
+  	while(ET.receiveData()) {
+
+		uint8_t checksum = serialDataStructure.statusMask+serialDataStructure.currentAngle+serialDataStructure.targetAngle+serialDataStructure.dynamicCurrent+serialDataStructure.holdCurrent+serialDataStructure.counter+serialDataStructure.rpm;
+
+		if (checksum==serialDataStructure.checksum && serialDataStructure.currentAngle==INT32_MAX) { // to detect loopback issues, we make sure the currentAngle is max_int (alsways set for ECU messages)
+			bool stepperEnable = serialDataStructure.statusMask >> 0 & 1 ? true : false;
+			bool stepperStop = serialDataStructure.statusMask >> 1 & 1 ? true : false;
+		
+			if (stepperEnable)
+				enableStepperMotor=true;
+			else
+				enableStepperMotor=false;
+				
+			if (stepperStop && !hasStopped) {
+				SmartPlanner.stop();
+				int64_t currAngle = stepperCtrl.getCurrentAngle();
+				currAngle=(currAngle*360*10)/(int32_t)ANGLE_STEPS;
+				float fTargetAngle = currAngle/10.0f;
+				int32_t newTargetAngle = ANGLE_FROM_DEGREES(fTargetAngle);
+				stepperCtrl.moveToAbsAngle(newTargetAngle);
+				hasStopped=true;
+			}
+			else if (!stepperStop) {
+				hasStopped=false;
+			}
+
+			if (!stepperStop && stepperEnable && hasSerialErrorState==0 && hasCalibrationErrorState==0) {
+				// velocity pid mode
+				if (serialDataStructure.rpm>0) {
+					int64_t currPlannerTarget = SmartPlanner.getTargetAngle();
+
+					if (abs(currPlannerTarget-serialDataStructure.targetAngle)>0 || SmartPlanner.done()) {
+						float fTargetAngle = serialDataStructure.targetAngle/10.0f;
+						int32_t newTargetAngle = fTargetAngle; // no ANGLE_FROM_DEGREES for Planner!
+						SmartPlanner.stop();
+						SmartPlanner.moveConstantVelocity(newTargetAngle,(float)serialDataStructure.rpm);
+					}
+				}
+				// torque mode
+				else {
+					int64_t currTarget = stepperCtrl.getDesiredAngle();
+					currTarget=(currTarget*360*10)/(int32_t)ANGLE_STEPS;
+
+					if (abs(currTarget-serialDataStructure.targetAngle)>0) {
+						float fTargetAngle = serialDataStructure.targetAngle/10.0f;
+						int32_t newTargetAngle = ANGLE_FROM_DEGREES(fTargetAngle);
+						stepperCtrl.moveToAbsAngle(newTargetAngle);
+						//SerialUSB.print("MOVE ");Serial.println(newTargetAngle);
+					}
+				}
+
+				plannerRPM = serialDataStructure.rpm;
+			}
+
+			if (stepperEnable && stepperCtrl.getDynamicCurrentMa()!=serialDataStructure.dynamicCurrent) {
+				stepperCtrl.setDynamicCurrentMa(serialDataStructure.dynamicCurrent);
+			}
+
+			if (stepperEnable && stepperCtrl.getHoldCurrentMa()!=serialDataStructure.holdCurrent) {
+				stepperCtrl.setHoldCurrentMa(serialDataStructure.holdCurrent);
+			}
+
+			
+			receivedPackage=true;
+		}  
+  	}
+  	if (receivedPackage)
+  		lastSerialMessageReceived=millis();
+		  
+	return;
+}
+
+
+uint8_t msg_counter=0;
+
 void NZS::loop(void)
 {
 	eepromData_t eepromData;
@@ -869,12 +1022,41 @@ void NZS::loop(void)
 	//read the enable pin and update
 	// this is also done as an edge interrupt but does not always see
 	// to trigger the ISR.
-	enableInput();
+	
+	//enableInput();
 
-	if (enableState != stepperCtrl.getEnable())
-	{
-		stepperCtrl.enable(enableState);
+
+	readSerialMessages();
+
+	// if no valid message is received for 200ms, the stepper will disable and go into an error state where it stays until it received valid messages for
+	// at least 5 seconds continously
+	if (millis()-lastSerialMessageReceived>200 || millis()-lastSerialMessageError<5000) {
+		enableStepperMotor=false;
+		hasSerialErrorState=true;
 	}
+	else {
+		hasSerialErrorState=false;
+	}
+
+	if (millis()-lastSerialMessageReceived>200) {
+		lastSerialMessageError = millis();
+	}
+
+
+	if (!enableStepperMotor) {
+		stepperCtrl.setDynamicCurrentMa(0);
+		stepperCtrl.setHoldCurrentMa(0);
+		SmartPlanner.stop();
+
+	}
+
+
+	/* if (!enableStepperMotor || enableStepperMotor != stepperCtrl.getEnable())
+	{
+		stepperCtrl.enable(enableStepperMotor);
+		if (!enableStepperMotor)
+			SmartPlanner.stop();
+	} */
 
 	//handle EEPROM
 	eepromData.angle=stepperCtrl.getCurrentAngle();
@@ -882,14 +1064,57 @@ void NZS::loop(void)
 	eepromData.valid=1;
 	eepromWriteCache((uint8_t *)&eepromData,sizeof(eepromData));
 
-	commandsProcess(); //handle commands
-#ifndef DISABLE_LCD
-	Lcd.process();
-#endif
-	//stepperCtrl.PrintData(); //prints steps and angle to serial USB.
+	//commandsProcess(); //handle commands
+
+	#ifndef DISABLE_LCD
+		Lcd.process();	// do not render the lcd while in live mode, i2c is super slow
+	#endif
 
 
-	printLocation(); //print out the current location
+	if (millis()-lastSerialOut>=SERIAL_TX_FREQ) {
+		lastSerialOut=millis();
+		char s[128];
+
+		int64_t deg, deg2;
+
+		deg = stepperCtrl.getCurrentAngle();
+		deg=(deg*360*10)/(int32_t)ANGLE_STEPS;
+		
+		deg2 = stepperCtrl.getDesiredAngle();
+		deg2=(deg2*360*10)/(int32_t)ANGLE_STEPS;
+
+
+
+		if (stepperCtrl.getEncoderError())
+			hasEncoderErrorState=true; // non-recoverable
+		
+		if (GetMotorVoltage()<5 && GetMotorVoltage()<5) {
+			hasMotorErrorState=true;
+			lastMotorError=millis();
+		}
+		else if (millis()-lastMotorError>5000) {
+			hasMotorErrorState=false;
+		}
+		
+		serialDataStructure.statusMask=0;
+		if (hasSerialErrorState) serialDataStructure.statusMask |= 1 << 0;
+		if (hasCalibrationErrorState) serialDataStructure.statusMask |= 1 << 1;
+		if (hasEncoderErrorState) serialDataStructure.statusMask |= 1 << 2;
+		if (hasMotorErrorState) serialDataStructure.statusMask |= 1 << 3;
+		if (enableStepperMotor) serialDataStructure.statusMask |= 1 << 4;
+		serialDataStructure.currentAngle = deg;
+		serialDataStructure.targetAngle = deg2;
+		serialDataStructure.rpm = plannerRPM;
+		serialDataStructure.dynamicCurrent = stepperCtrl.getDynamicCurrentMa();
+		serialDataStructure.holdCurrent = stepperCtrl.getHoldCurrentMa();
+		serialDataStructure.counter = ++msg_counter;
+		serialDataStructure.checksum = serialDataStructure.statusMask+serialDataStructure.currentAngle+serialDataStructure.targetAngle+serialDataStructure.dynamicCurrent+serialDataStructure.holdCurrent+serialDataStructure.counter+serialDataStructure.checksum;
+		ET.sendData();
+
+	}
+	
+
+	//printLocation(); //print out the current location
 
 	return;
 }

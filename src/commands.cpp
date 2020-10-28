@@ -1053,8 +1053,6 @@ static int move_cmd(sCmdUart *ptrUart,int argc, char * argv[])
 		//		if (f<-1.8)
 		//			f=-1.8;
 		x=ANGLE_FROM_DEGREES(f);
-		LOG("moving %d", x);
-
 		stepperCtrl.moveToAbsAngle(x);
 	}
 	if (2 == argc)
@@ -1520,16 +1518,16 @@ uint8_t putch(char data)
 #endif
 uint8_t kbhit_hw(void)
 {
-	return Serial5.available();
+	return 0;//Serial5.available();
 	//return SerialUSB.peek() != -1;
 }
 uint8_t getChar_hw(void)
 {
-	return Serial5.read();
+	return 0;//Serial5.read();
 }
 uint8_t putch_hw(char data)
 {
-	return Serial5.write((uint8_t)data);
+	return 0;//Serial5.write((uint8_t)data);
 }
 
 
@@ -1562,8 +1560,8 @@ void commandsInit(void)
 
 #ifdef CMD_SERIAL_PORT
 	CommandInit(&SerialUart, kbhit_hw, getChar_hw, putch_hw ,NULL); //set up the UART structure
-	Serial5.print("\n\rPower Up\n\r");
-	Serial5.print(COMMANDS_PROMPT);
+	//Serial5.print("\n\rPower Up\n\r");
+	//Serial5.print(COMMANDS_PROMPT);
 #endif
 
 }
@@ -1586,9 +1584,9 @@ int commandsProcess(void)
 #endif
 
 #ifndef MECHADUINO_HARDWARE
-if (SerialUSB.dtr())
+/* if (SerialUSB.dtr())
   {
     return CommandProcess(&UsbUart,Cmds,' ',COMMANDS_PROMPT);
-  }
+  } */
 #endif
 }

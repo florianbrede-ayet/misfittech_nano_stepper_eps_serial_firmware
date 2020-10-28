@@ -59,6 +59,7 @@ class Planner
 		void tick(void); //this is called on regular tick interval
 		void stop(void);
 		bool done(void) {return currentMode==PLANNER_NONE;}
+		float getTargetAngle(void) {return endAngle;}
 };
 
 

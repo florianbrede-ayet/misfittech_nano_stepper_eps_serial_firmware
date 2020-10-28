@@ -42,6 +42,13 @@
 #include <Arduino.h>
 
 
+//#define PIN_SERIAL_RX       (31ul)
+//#define PIN_SERIAL_TX       (30ul)
+//#define PAD_SERIAL_TX       (UART_TX_PAD_2)
+//#define PAD_SERIAL_RX       (SERCOM_RX_PAD_3)
+
+//Uart Serial5( &sercom5, PIN_SERIAL_RX, PIN_SERIAL_TX, PAD_SERIAL_RX, PAD_SERIAL_TX ) ;
+
 //uncomment this if you are using the Mechaduino hardware
 //#define MECHADUINO_HARDWARE
 
@@ -87,18 +94,18 @@
 //#define ENABLE_PHASE_PREDICTION //this enables prediction of phase at high velocity to increase motor speed
 //as of FW0.11 it is considered development only
 
-#define VERSION "FW: 0.40" //this is what prints on LCD during splash screen
+#define VERSION "FW:EPS-01" //this is what prints on LCD during splash screen
 
 //Define this to allow command out serial port, else hardware serial is debug log
-//#define CMD_SERIAL_PORT
+#define CMD_SERIAL_PORT
 
 #define SERIAL_BAUD (115200) //baud rate for the serial ports
 
 //This section is for using the step and dir pins as serial port
 // when the enable pin is inactive.
 #ifndef MECHADUINO_HARDWARE
-#define USE_STEP_DIR_SERIAL
-#define STEP_DIR_BAUD (19200) //this is the baud rate we will use
+//#define USE_STEP_DIR_SERIAL
+#define STEP_DIR_BAUD (9200) //this is the baud rate we will use
 #endif
 
 
@@ -242,6 +249,9 @@ typedef enum {
 //TC4 is used for step count
 //TC5 is use for timing the control loop
 
+
+
+#define DISABLE_LCD	// performance!
 
 //mechaduio and Arduino Zero has defined serial ports differently than NZS
 #ifdef MECHADUINO_HARDWARE

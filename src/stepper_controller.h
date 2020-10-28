@@ -208,7 +208,13 @@ class StepperCtrl
 
 		void PID_Autotune(void);
 		void setZero(void);
-};
 
+		void setHoldCurrentMa(int32_t currentHoldMa);
+		void setDynamicCurrentMa(int32_t currentMa);
+		uint32_t getHoldCurrentMa(void);
+		uint32_t getDynamicCurrentMa(void);
+
+		bool getEncoderError();
+};
 #endif //__STEPPER_CONTROLLER_H__
 
